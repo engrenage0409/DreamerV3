@@ -1,10 +1,25 @@
-> **Experiment branch — Crafter DreamerV3 World Model Lab**
->
-> This branch contains an independently developed Windows/Crafter experiment workflow built on the upstream **R2-Dreamer** implementation. The original research implementation and citation are credited below; this repository is **not** a claim of authorship of the upstream R2-Dreamer paper or its official code.
->
-> **Experiments:** checkpoint+replay resume, HUD videos, epsilon-greedy collection, weighted reward NLL, actor/reward diagnostics, and controlled ablations. See [Crafter experiment notes](docs/CRAFTER_EXPERIMENTS.md).
->
-> **Current findings:** in a 25k-step comparison, the positive-reward-weighted agent improved sample mean reward (2.33 vs 1.97 across 30 episodes), but a shared-transition test did **not** show a clear gain in one-step prior reward recall (36.9% vs 36.2% at threshold 0.05). These are limited experimental results, not benchmark SOTA claims.
+# DreamerV3 World Model Lab — Crafter Research Extension
+
+> **Experimental research branch `dreamerv3-experiments`** — personal DreamerV3/Crafter training and ablations built on the upstream R2-Dreamer implementation. Original authorship, citation and upstream repository instructions are preserved below. This branch does **not** claim authorship of the R2-Dreamer paper or an official Crafter benchmark result.
+
+**[📘 Full bilingual-context research report: CarRacing → Crafter, Action Bias, Reward and Ensemble ablations](docs/CRAFTER_EXPERIMENTS.md)**
+
+The report reconstructs the development journey, including early **CarRacing World Model loss decreasing without a successful driving policy**, Crafter's early **`do` / `place_plant` / `move_down` action bias**, entropy regularization and ε-greedy improvements, Reward Head diagnostics on shared transitions, three-head Latent Disagreement prediction, and the **negative 25k→30k Intrinsic Reward ablation**.
+
+### Main findings (local experiments, limited training budget)
+
+| Experiment | Observation |
+|---|---|
+| Crafter 5k baseline | Mode / Sample game reward ~1.50 / 1.90; notable action preference |
+| Entropy coefficient 0.0003→0.003 | Sample game reward ~1.90→2.20 at 5k, but mode still biased to `move_down` in one run |
+| Entropy + ε-greedy collection | Helped diversify behavior; 20k sample reward ~2.60 |
+| Weighted reward NLL at 25k | Weighted sample reward 2.33 vs control 1.97, **but** identical-transition Prior positive recall 36.92% vs 36.15% |
+| Three-head latent predictor | Validation MSE 1.0025→0.2783 over 20 epochs; this does not establish useful novelty |
+| **Control vs Intrinsic at 30k** | **Mode game reward 3.13 vs 2.20**; mode distinct achievements 4.10 vs 3.17; intrusive bonus was detrimental under this setup |
+
+**Current best candidate:** `crafter_intrinsic_control_30k` (no intrinsic reward). The 30k intrinsic experiment is recorded as a negative ablation; higher prediction accuracy or reward bonuses do not guarantee improved policy learning. Values above are small-budget observations with different evaluation samples where noted, **not official Crafter Score**.
+
+**Implementation map:** `train.py`, `trainer.py`, `dreamer.py`, `rssm.py`, `checkpointing.py`, `diagnose_actor.py`, `diagnose_reward.py`, `compare_reward_shared.py`, `train_disagreement.py`, `disagreement_ensemble.py`, `evaluate_hud.py`, `hud_recorder.py`. See the complete report for scripts, matched experiment commands, reward definitions and caveats.
 
 ---
 
