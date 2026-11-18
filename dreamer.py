@@ -26,6 +26,12 @@ class Dreamer(nn.Module):
         self.device = torch.device(config.device)
         self.act_entropy = float(config.act_entropy)
         self.reward_pos_weight = float(getattr(config, "reward_pos_weight", 1.0))
+        # External frozen ensemble: not registered as a model module so 25k
+        # checkpoint state_dict keys stay fully backward compatible.
+        object.__setattr__(self, "_intrinsic_ensemble", None)
+        self.intrinsic_beta = 0.0
+        self.intrinsic_scale = 0.01
+        self.intrinsic_clip = 3.0
         if self.reward_pos_weight < 1.0:
             raise ValueError("model.reward_pos_weight must be >= 1.0")
         self.kl_free = float(config.kl_free)
@@ -170,6 +176,23 @@ class Dreamer(nn.Module):
         if config.compile:
             print("Compiling update function with torch.compile...")
             self._cal_grad = torch.compile(self._cal_grad, mode="reduce-overhead")
+
+    def configure_intrinsic(self, ensemble, beta=0.0, scale=0.01, clip=3.0):
+        """Attach a frozen auxiliary ensemble without changing checkpoint keys.
+
+        Intrinsic bonus is computed on imagined (feature_t, action_t). The
+        resulting bonus is aligned with reward_{t+1}; no bonus is added at
+        the first imagined state. Actor/critic are trained, not the ensemble.
+        """
+        if beta < 0 or scale <= 0 or clip <= 0:
+            raise ValueError("intrinsic beta >= 0, scale > 0, clip > 0 required")
+        ensemble = ensemble.to(self.device).eval()
+        for p in ensemble.parameters():
+            p.requires_grad_(False)
+        object.__setattr__(self, "_intrinsic_ensemble", ensemble)
+        self.intrinsic_beta = float(beta)
+        self.intrinsic_scale = float(scale)
+        self.intrinsic_clip = float(clip)
 
     def _update_slow_target(self):
         """Update slow-moving value target network."""
@@ -500,6 +523,23 @@ class Dreamer(nn.Module):
 
         # (B*T, T_imag, 1)
         imag_reward = self._frozen_reward(imag_feat).mode()
+        # Phase 5.3b: optional normalized, capped ensemble disagreement bonus.
+        # Align (state_t, action_t) uncertainty with the *next* state's reward;
+        # the current imagined state's first reward gets no synthetic bonus.
+        imagined_reward_total = imag_reward
+        if self._intrinsic_ensemble is not None and self.intrinsic_beta > 0.0:
+            with torch.no_grad():
+                unc = self._intrinsic_ensemble.disagreement(imag_feat[:, :-1], imag_action[:, :-1])
+                unc = torch.nan_to_num(unc.float(), nan=0.0, posinf=0.0, neginf=0.0)
+                normalized = (unc / self.intrinsic_scale).clamp(min=0.0, max=self.intrinsic_clip)
+                bonus = self.intrinsic_beta * normalized
+                bonus = F.pad(bonus, (1, 0)).unsqueeze(-1)
+                imagined_reward_total = imag_reward + bonus
+                metrics["intrinsic/disagreement_mean"] = unc.mean().detach()
+                metrics["intrinsic/disagreement_max"] = unc.max().detach()
+                metrics["intrinsic/bonus_mean"] = bonus.mean().detach()
+                metrics["intrinsic/bonus_max"] = bonus.max().detach()
+                metrics["intrinsic/bonus_fraction"] = (bonus > 0.0).float().mean().detach()
         # (B*T, T_imag, 1)  probability of continuation
         imag_cont = self._frozen_cont(imag_feat).mean
         # (B*T, T_imag, 1)
@@ -511,7 +551,7 @@ class Dreamer(nn.Module):
         last = torch.zeros_like(imag_cont)
         term = 1 - imag_cont
         ret = self._lambda_return(
-            last, term, imag_reward, imag_value, imag_value, disc, self.lamb
+            last, term, imagined_reward_total, imag_value, imag_value, disc, self.lamb
         )  # (B*T, T_imag-1, 1)
         ret_offset, ret_scale = self.return_ema(ret)
         # (B*T, T_imag-1, 1)
