@@ -59,3 +59,64 @@ Weighted policy scores were higher in this limited evaluation, but improving rew
 - Do **not** commit `logdir/`, trusted local checkpoint blobs (`*.pt`), replay buffers, credentials, or MP4 outputs.
 - Load only locally created, trusted PyTorch checkpoints; resuming replay may use `torch.load(weights_only=False)`.
 - Keep experiment branch separate from upstream/default branch until changes have been reviewed.
+
+
+## Phase 5.3b: bounded intrinsic bonus in imagined trajectories
+
+Implementation: `disagreement_ensemble.py`, `dreamer.py` (`configure_intrinsic` and `_cal_grad`), and `train.py`. The same 25k world model and replay checkpoint are used as the starting point for both runs. Ensemble weights are **frozen**, loaded only when `intrinsic_beta>0`, and never registered in Dreamer's `state_dict`; existing checkpoints load strictly. The bonus is applied only to **imagined** rewards for the Actor-Critic and not to replay labels or the Reward Head training loss.
+
+The model computes the ensemble variance on `(imag_feat[t], imag_action[t])`. That variance is attached to `imag_reward[t+1]`, not the same-time reward; the first imagined timestep has no intrinsic bonus. With `beta=0.05`, `scale=0.01035`, and `clip=3.0`, the maximum intrinsic bonus per imagined step is **0.15**.
+
+**Important limitations**:
+- The ensemble is static while the resumed world model evolves, so feature distribution drift may increase disagreement for reasons unrelated to meaningful novelty. Limit initial continuation to 5k environment steps and measure it.
+- The ensemble was trained on only about 5k transitions from the original actor; high disagreement can reflect model error or noise, not just epistemic uncertainty. A result must be judged by actual Crafter achievements and repeated-action behavior.
+- `r_total` is used inside imagined actor/value targets. The replay value loss still uses real environment reward and an imagined-value bootstrap, so this is a prototype exploration ablation rather than a complete separate intrinsic critic.
+- The two runs may diverge stochastically even from the same checkpoint; results from one seed are suggestive only.
+- All experiment checkpoints are local; do not commit `*.pt` to Git.
+
+### Windows commands (PowerShell)
+
+Ensure the new GitHub branch code has been fetched and fast-forwarded, and that the 25k weighted checkpoint and `ensemble_diagnostics/disagreement_ensemble.pt` exist locally. To keep the ablation narrow, use exactly the same configuration in both runs except `intrinsic_beta`.
+
+```powershell
+# CONTROL: intrinsic beta zero
+python train.py `
+  env=crafter model.rep_loss=dreamer model.compile=false `
+  model.log_grads=true model.act_entropy=0.003 `
+  +model.reward_pos_weight=3.0 `
+  batch_size=16 batch_length=64 `
+  env.steps=30000 env.train_ratio=512 `
+  env.eval_episode_num=10 trainer.eval_every=5000 `
+  trainer.update_log_every=500 trainer.video_pred_log=false `
+  buffer.max_size=30000 buffer.storage_device=cpu `
+  device=cuda:0 seed=0 `
+  +checkpoint_every=5000 +trainer.explore_epsilon=0.05 `
+  +resume=logdir/crafter_reward_weighted_25k/checkpoint_25000.pt `
+  +intrinsic_beta=0.0 `
+  logdir=logdir/crafter_intrinsic_control_30k
+```
+
+```powershell
+# TREATMENT: identical resume and settings; small frozen intrinsic bonus
+python train.py `
+  env=crafter model.rep_loss=dreamer model.compile=false `
+  model.log_grads=true model.act_entropy=0.003 `
+  +model.reward_pos_weight=3.0 `
+  batch_size=16 batch_length=64 `
+  env.steps=30000 env.train_ratio=512 `
+  env.eval_episode_num=10 trainer.eval_every=5000 `
+  trainer.update_log_every=500 trainer.video_pred_log=false `
+  buffer.max_size=30000 buffer.storage_device=cpu `
+  device=cuda:0 seed=0 `
+  +checkpoint_every=5000 +trainer.explore_epsilon=0.05 `
+  +resume=logdir/crafter_reward_weighted_25k/checkpoint_25000.pt `
+  +intrinsic_beta=0.05 `
+  +intrinsic_scale=0.01035 `
+  +intrinsic_clip=3.0 `
+  +intrinsic_ensemble_path=logdir/crafter_reward_weighted_25k/ensemble_diagnostics/disagreement_ensemble.pt `
+  logdir=logdir/crafter_intrinsic_bonus_30k
+```
+
+Replace the resume filename with `latest.pt` if `checkpoint_25000.pt` is absent, **only after verifying it is the 25k checkpoint**. Inspect TensorBoard scalar names `train/intrinsic/disagreement_mean`, `train/intrinsic/bonus_mean`, `train/intrinsic/bonus_max`, `episode/eval_score`, `train/loss/policy`, and `train/loss/value`. The intrinsic logs appear only for treatment.
+
+Then compare at least 30 independent `mode` and `sample` episodes per checkpoint with `diagnose_actor.py` (the saved eval episode count of 10 is an intermediate signal, not an adequate final comparison). Also check `do` action repetition and distinct achieved tasks before declaring exploration improved.
