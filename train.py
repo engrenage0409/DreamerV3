@@ -7,6 +7,7 @@ import hydra
 import torch
 
 import tools
+from checkpointing import save_checkpoint, load_checkpoint  # CHECKPOINT_PATCH_V1
 from buffer import Buffer
 from dreamer import Dreamer
 from envs import make_envs
@@ -48,14 +49,28 @@ def main(config):
         act_space,
     ).to(config.device)
 
-    policy_trainer = OnlineTrainer(config.trainer, replay_buffer, logger, logdir, train_envs, eval_envs)
-    policy_trainer.begin(agent)
-
-    items_to_save = {
-        "agent_state_dict": agent.state_dict(),
-        "optims_state_dict": tools.recursively_collect_optim_state_dict(agent),
-    }
-    torch.save(items_to_save, logdir / "latest.pt")
+    checkpoint_every = int(config.get("checkpoint_every", 5000))
+    policy_trainer = OnlineTrainer(
+        config.trainer, replay_buffer, logger, logdir, train_envs, eval_envs,
+        checkpoint_every=checkpoint_every,
+        checkpoint_callback=lambda agent, trainer, step, updates: save_checkpoint(
+            logdir, agent, replay_buffer, trainer, step, updates, numbered=True
+        ),
+    )
+    resume_path = str(config.get("resume", "")).strip()
+    if resume_path:
+        resume_state = load_checkpoint(resume_path, agent, replay_buffer)
+        policy_trainer.restore_training_state(resume_state)
+    final_step, final_updates = policy_trainer.begin(agent)
+    save_checkpoint(logdir, agent, replay_buffer, policy_trainer,
+                    final_step, final_updates, numbered=False)
+    # One final evaluation video at the terminal step. Latest checkpoint is
+    # already safe on disk even if video rendering fails.
+    if int(config.trainer.eval_episode_num) > 0 and eval_envs is not None:
+        try:
+            policy_trainer.eval(agent, final_step)
+        except Exception as err:
+            print(f"[WARNING] Final evaluation failed, checkpoint is saved: {err}")
 
 
 if __name__ == "__main__":

@@ -120,6 +120,21 @@ class RewardObs(gym.Wrapper):
 
 
 class Dtype(gym.Wrapper):
+    def video_snapshot(self, size=(576, 576)):
+        """Retrieve HD Crafter frame and real state from the environment worker.
+
+        Called only for evaluation recording; never changes agent observations.
+        """
+        inner = self.env
+        while hasattr(inner, 'env'):
+            inner = inner.env
+        native = getattr(inner, '_env', None)
+        if native is None or not hasattr(native, '_player'):
+            raise RuntimeError('video_snapshot only supports Crafter.')
+        player = native._player
+        return (native.render(size=size), dict(player.inventory),
+                dict(player.achievements), list(native.action_names))
+
     def step(self, action):
         obs, rew, done, info = self.env.step(action)
         return tools.convert(obs), np.float32(rew), done, info

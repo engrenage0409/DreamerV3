@@ -548,3 +548,5 @@ def print_param_stats(model):
                 fmt(rms_val),
             )
         )
+
+import tb_video_win

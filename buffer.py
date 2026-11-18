@@ -61,7 +61,7 @@ class Buffer:
     def add_transition(self, data):
         # This is batched data and lifted for storage.
         # (B, ...) -> (B, 1, ...)
-        coords = self._buffer.extend(data.unsqueeze(1))
+        coords = self._buffer.extend(data.to(self.storage_device).unsqueeze(1))
         if self._online is not None:
             self._online.push(data, coords)
 

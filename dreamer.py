@@ -25,6 +25,9 @@ class Dreamer(nn.Module):
         super().__init__()
         self.device = torch.device(config.device)
         self.act_entropy = float(config.act_entropy)
+        self.reward_pos_weight = float(getattr(config, "reward_pos_weight", 1.0))
+        if self.reward_pos_weight < 1.0:
+            raise ValueError("model.reward_pos_weight must be >= 1.0")
         self.kl_free = float(config.kl_free)
         self.imag_horizon = int(config.imag_horizon)
         self.horizon = int(config.horizon)
@@ -461,7 +464,24 @@ class Dreamer(nn.Module):
             raise NotImplementedError
 
         # reward and continue
-        losses["rew"] = torch.mean(-self.reward(feat).log_prob(to_f32(data["reward"])))
+        # Weighted reward NLL: preserve scalar reward values and the original reward distribution.
+        # A weight of 1.0 reproduces the unweighted original objective.
+        reward_targets = to_f32(data["reward"])
+        reward_nll = -self.reward(feat).log_prob(reward_targets)
+        # Align reward [B,T,1] and log_prob [B,T] or [B,T,1] safely.
+        reward_nll = reward_nll.reshape(B, T, -1).mean(dim=-1)
+        reward_positive = (reward_targets.reshape(B, T, -1) > 0).any(dim=-1)
+        reward_weights = torch.where(
+            reward_positive,
+            torch.full_like(reward_nll, self.reward_pos_weight),
+            torch.ones_like(reward_nll),
+        )
+        # Normalized weights avoid changing the overall scale when positives are more common.
+        losses["rew"] = (reward_weights * reward_nll).sum() / reward_weights.sum().clamp_min(1.0)
+        metrics["reward/positive_fraction"] = reward_positive.float().mean().detach()
+        metrics["reward/nll_unweighted"] = reward_nll.mean().detach()
+        metrics["reward/nll_weighted"] = losses["rew"].detach()
+        metrics["reward/pos_weight"] = torch.tensor(self.reward_pos_weight, device=reward_nll.device)
         cont = 1.0 - to_f32(data["is_terminal"])
         losses["con"] = torch.mean(-self.cont(feat).log_prob(cont))
         # log
