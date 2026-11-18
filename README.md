@@ -1,3 +1,13 @@
+> **Experiment branch — Crafter DreamerV3 World Model Lab**
+>
+> This branch contains an independently developed Windows/Crafter experiment workflow built on the upstream **R2-Dreamer** implementation. The original research implementation and citation are credited below; this repository is **not** a claim of authorship of the upstream R2-Dreamer paper or its official code.
+>
+> **Experiments:** checkpoint+replay resume, HUD videos, epsilon-greedy collection, weighted reward NLL, actor/reward diagnostics, and controlled ablations. See [Crafter experiment notes](docs/CRAFTER_EXPERIMENTS.md).
+>
+> **Current findings:** in a 25k-step comparison, the positive-reward-weighted agent improved sample mean reward (2.33 vs 1.97 across 30 episodes), but a shared-transition test did **not** show a clear gain in one-step prior reward recall (36.9% vs 36.2% at threshold 0.05). These are limited experimental results, not benchmark SOTA claims.
+
+---
+
 ## R2-Dreamer: Redundancy-Reduced World Models without Decoders or Augmentation
 
 This repository provides the official implementation of [R2-Dreamer][r2dreamer] (ICLR 2026), a decoder-free, augmentation-free world model with redundancy-reducing regularization on latent representations. It also includes an efficient PyTorch DreamerV3 reproduction that trains **~5x faster** than a widely used [codebase][dreamerv3-torch], along with other baselines. Selecting R2-Dreamer via the config provides an additional **~1.6x speedup** over this baseline.
