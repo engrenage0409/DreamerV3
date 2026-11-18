@@ -120,3 +120,43 @@ python train.py `
 Replace the resume filename with `latest.pt` if `checkpoint_25000.pt` is absent, **only after verifying it is the 25k checkpoint**. Inspect TensorBoard scalar names `train/intrinsic/disagreement_mean`, `train/intrinsic/bonus_mean`, `train/intrinsic/bonus_max`, `episode/eval_score`, `train/loss/policy`, and `train/loss/value`. The intrinsic logs appear only for treatment.
 
 Then compare at least 30 independent `mode` and `sample` episodes per checkpoint with `diagnose_actor.py` (the saved eval episode count of 10 is an intermediate signal, not an adequate final comparison). Also check `do` action repetition and distinct achieved tasks before declaring exploration improved.
+
+
+## Final 25k → 30k intrinsic ablation (2026-11-19 analysis)
+
+Source: separate local TensorBoard event logs for control and intrinsic, and 30-episode actor-diagnostic reports per mode. The event logs contain only two 10-episode evaluation points (at 25k and 30k); the 30-episode post-training evaluations below are a separate and more informative comparison. Do not aggregate the `episode/eval_collect_*` TensorBoard scalars as actual achievement count: training code aggregates cumulative achievement counters across steps.
+
+**30 independent game evaluations per policy:**
+
+| Metric | Control 30k | Intrinsic 30k |
+|---|---:|---:|
+| Mode mean episode reward | **3.1333** | 2.2000 |
+| Sample mean episode reward | **2.9000** | 2.7667 |
+| Mode mean distinct achievements | **4.1000** | 3.1667 |
+| Sample mean distinct achievements | **3.8333** | 3.7000 |
+| Mode empirical action entropy | **2.5761** | 2.0343 |
+| Sample empirical action entropy | **2.6999** | 2.2065 |
+| Mode mean episode length | 185.27 | 197.53 |
+| Sample mean episode length | 187.97 | 200.30 |
+
+In the intrinsic group's greedy mode, `move_right` and `move_up` account for **28.81% + 25.45% = 54.26%** of actions (control: 12.31% + 13.31% = 25.62%). This is evidence of a more concentrated action distribution, not direct evidence of zero physical movement.
+
+**TensorBoard training traces (10 update summaries each, 25k–30k):**
+
+| Recorded quantity | Control first → last | Intrinsic first → last |
+|---|---|---|
+| `train/intrinsic/bonus_mean` | disabled | 0.04670 → **0.05819** |
+| `train/intrinsic/bonus_max` | disabled | 0.13222 → **0.14301** |
+| `train/intrinsic/disagreement_mean` | disabled | 0.01031 → **0.01285** |
+| `train/rew` | 0.02165 → 0.02401 | 0.02019 → 0.02716 |
+| `train/val` | 2.61976 → **2.44110** | 2.60149 → **8.79288** |
+| `train/tar` | 2.70082 → **2.49784** | 2.99039 → **9.16005** |
+| `train/action_entropy` (per-state policy entropy) | 1.50805 → **1.55663** | 1.52217 → **1.23952** |
+| `episode/eval_score` (10 episodes) | 2.10 → **2.30** | 2.00 → **1.10** |
+| `train/opt/nonfinite_grads` | 0 → 0 | 0 → 0 |
+
+**Interpretation:** the frozen ensemble supplied a nontrivial bonus during imagination, but the intrinsic branch's critic estimate and imagined return target rose several-fold while real gameplay and mode achievement count worsened. This is consistent with exploration bonus biasing or destabilizing value targets and action selection. The static ensemble was trained on an earlier RSSM feature space, so representation drift is a further plausible contributor; neither explanation is established causally by these logs alone. It is **not** a numeric overflow problem: nonfinite-gradient counts were zero.
+
+**Decision:** use `crafter_intrinsic_control_30k` as the current best *candidate* model. Record the frozen-ensemble intrinsic reward as a **negative ablation** rather than claiming exploration improvement. Do not extend this failed bonus run blindly; future attempts would need a representation-stable or updated ensemble, calibrated intrinsic scale, and likely separate intrinsic-value treatment, with multi-seed evaluation. Training for more epochs/steps never guarantees improved reward.
+
+**Reproduction artifacts:** scripts `diagnose_actor.py`, `train_disagreement.py`, `disagreement_ensemble.py`, `dreamer.py`. Full TensorBoard event logs and individual checkpoints stay on the user's machine; do not upload to the source repository.
